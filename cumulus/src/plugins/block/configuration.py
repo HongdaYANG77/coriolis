@@ -1802,9 +1802,10 @@ class BlockConf ( GaugeConf ):
 
         ``buffers`` is the name of the buffer cell, or a list of names, one per
         level starting from the sinks, the last one being used for the upper
-        levels. ``maxSinks`` is the maximum number of sinks of each net of the
-        tree, as a single value or a list, in the same way. They default to
-        the H-Tree ones (``spares.buffer`` and ``spares.maxSinks``).
+        levels, or a plugins.block.cts.BufferSizer to choose them from the
+        Liberty data. ``maxSinks`` is the maximum number of sinks of each net
+        of the tree, as a single value or a list, in the same way. They
+        default to the H-Tree ones (``spares.buffer`` and ``spares.maxSinks``).
         """
         for item in self.hTreeDatas:
             if item[0] == netName:

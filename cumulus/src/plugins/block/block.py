@@ -613,7 +613,9 @@ class Block ( object ):
             options  = self.conf.ctsOptions[ netName ]
             buffers  = self.conf.bufferConf.masterCell
             maxSinks = self.conf.bufferConf.maxSinks
-            if options['buffers'] is not None:
+            if callable(options['buffers']):
+                buffers = options['buffers']
+            elif options['buffers'] is not None:
                 names   = options['buffers'] if isinstance(options['buffers'], (list, tuple)) \
                                              else [ options['buffers'] ]
                 buffers = []

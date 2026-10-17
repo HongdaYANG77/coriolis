@@ -25,10 +25,12 @@ Only flat designs are supported for now: the net to buffer must belong
 to the cell placed by Etesian (no block instance).
 """
 
-from ...Hurricane       import Box, Point, Net, RoutingPad, Occurrence
+from ...Hurricane       import DbU, Box, Point, Net, RoutingPad, Occurrence
+from ...CRL             import AllianceFramework, Catalog
 from ...helpers         import trace
-from ...helpers.io      import ErrorMessage
+from ...helpers.io      import ErrorMessage, WarningMessage
 from ...helpers.overlay import UpdateSession
+from .nldm              import NldmLibrary
 
 
 def getBufferIos ( bufferCell ):
@@ -208,6 +210,94 @@ def partitionSinks ( sinkPlugs, maxSinks ):
          + partitionSinks( ordereds[cut:], maxSinks )
 
 
+def getTreeLength ( points ):
+    """Length of the Manhattan minimum spanning tree of ``points`` (Prim)."""
+    if len(points) < 2: return 0
+    inTree   = [ False ] * len(points)
+    distance = [ None  ] * len(points)
+    distance[0] = 0
+    length      = 0
+    for _ in range( len(points) ):
+        i = min( (j for j in range(len(points)) if not inTree[j] and distance[j] is not None)
+               , key=lambda j: distance[j] )
+        inTree[i] = True
+        length   += distance[i]
+        for j in range( len(points) ):
+            if inTree[j]: continue
+            d = abs(points[i].getX()-points[j].getX()) + abs(points[i].getY()-points[j].getY())
+            if distance[j] is None or d < distance[j]: distance[j] = d
+    return length
+
+
+class BufferSizer ( object ):
+    """
+    Choose the buffer of each group of sinks from its Liberty (NLDM) data:
+    the smallest of ``buffers`` whose output transition, under its estimated
+    load, does not exceed ``maxSlew`` (the input transition is assumed to be
+    ``maxSlew`` too), within its max_capacitance. If none fits, the strongest
+    one is used.
+
+    The load is the sum of the sinks input capacitances plus the wire,
+    estimated as the minimum spanning tree of the sinks and of their center
+    of gravity (where the buffer is placed) times ``wireCapacitance``.
+
+    ``maxSlew`` and the capacitances are in the units of the Liberty file
+    (usually ns and pF), ``wireCapacitance`` being per micron. ``liberty``
+    defaults to the one given to Yosys by the PDK setup.
+
+    An instance can be given as the ``bufferCells`` of buildClockTree().
+    """
+
+    def __init__ ( self, buffers, maxSlew, wireCapacitance, liberty=None ):
+        if liberty is None:
+            from ...designflow.yosys import Yosys
+            liberty = Yosys._liberty
+        if liberty is None:
+            raise ErrorMessage( 1, 'cts.BufferSizer(): No Liberty file given and none set by the PDK.' )
+        self.library         = NldmLibrary( str(liberty) )
+        self.maxSlew         = maxSlew
+        self.wireCapacitance = wireCapacitance
+        self.missings        = set()
+        framework            = AllianceFramework.get()
+        self.buffers         = []
+        for name in buffers:
+            cell   = framework.getCell( name, Catalog.State.Views )
+            timing = self.library.getCell( name )
+            if cell is None or timing is None:
+                raise ErrorMessage( 1, 'cts.BufferSizer(): Buffer "{}" not found in the {}.' \
+                                       .format( name, 'library' if cell is None else 'Liberty file' ))
+            self.buffers.append( (cell, timing) )
+        self.buffers.sort( key=lambda item: sum(item[1].pins.values()) )
+
+    def getPinCapacitance ( self, plug ):
+        name   = str( plug.getInstance().getMasterCell().getName() )
+        timing = self.library.getCell( name )
+        if timing is None:
+            if name not in self.missings:
+                print( WarningMessage( 'cts.BufferSizer(): No Liberty data for "{}", '
+                                       'its input capacitance is ignored.'.format(name) ))
+                self.missings.add( name )
+            return 0.0
+        return timing.pins.get( str(plug.getMasterNet().getName()), 0.0 )
+
+    def getLoad ( self, sinkPlugs ):
+        points = [ getSinksCenter(sinkPlugs) ] \
+               + [ plug.getInstance().getAbutmentBox().getCenter() for plug in sinkPlugs ]
+        wire   = DbU.toPhysical( getTreeLength(points), DbU.UnitPowerMicro ) * self.wireCapacitance
+        return wire + sum( self.getPinCapacitance(plug) for plug in sinkPlugs )
+
+    def __call__ ( self, sinkPlugs ):
+        load = self.getLoad( sinkPlugs )
+        for cell, timing in self.buffers:
+            output = getBufferIos( cell )[1].getName()
+            if load > timing.maxCap.get( str(output), load ): continue
+            slew = max( timing.lookup('rise_transition', self.maxSlew, load)
+                      , timing.lookup('fall_transition', self.maxSlew, load) )
+            if slew <= self.maxSlew:
+                return cell
+        return self.buffers[-1][0]
+
+
 def buildClockTree ( etesian, net, bufferCells, sliceHeight, maxSinks, maxRows=10 ):
     """
     Build, after placement, a buffer tree on ``net``. The tree is built
@@ -220,6 +310,8 @@ def buildClockTree ( etesian, net, bufferCells, sliceHeight, maxSinks, maxRows=1
     ``bufferCells`` and ``maxSinks`` are either one value, or a list giving
     the value of each level, starting from the one closest to the original
     sinks (level 0), the last value being used for all the upper levels.
+    ``bufferCells`` may also be a callable (for instance a BufferSizer),
+    returning the buffer cell of a group of sinks.
 
     Buffers are named "cts_<net>_<level>_<index>".
 
@@ -241,7 +333,9 @@ def buildClockTree ( etesian, net, bufferCells, sliceHeight, maxSinks, maxRows=1
         level = []
         for group in partitionSinks( sinks, levelSinks ):
             name = 'cts_{}_{}_{}'.format( net.getName(), len(levels), len(level) )
-            instance, outputNet = insertBuffer( etesian, net, group, atLevel(bufferCells, len(levels))
+            if callable(bufferCells): bufferCell = bufferCells( group )
+            else:                     bufferCell = atLevel( bufferCells, len(levels) )
+            instance, outputNet = insertBuffer( etesian, net, group, bufferCell
                                               , name, sliceHeight, maxRows )
             if instance is None:
                 raise ErrorMessage( 1, [ 'cts.buildClockTree(): No room left to place buffer "{}" of "{}".' \
