@@ -1622,6 +1622,7 @@ class BlockConf ( GaugeConf ):
         self.useClockTree  = False
         self.hTreeDatas    = [ ]
         self.ctsNets       = [ ]
+        self.ctsOptions    = { }
         self.useHFNS       = False
         self.useSpares     = True
         self.trackAvoids   = []
@@ -1793,12 +1794,17 @@ class BlockConf ( GaugeConf ):
         if net and net.isClock():
             self.useClockTree = True
 
-    def usePostPlacementCts ( self, netName ):
+    def usePostPlacementCts ( self, netName, buffers=None, maxSinks=None ):
         """
         Request a clock tree on ``netName`` built *after* the placement (see
         plugins.block.cts.buildClockTree()), instead of an H-Tree built before
-        it. The buffer and its maximum number of sinks are the ones of the
-        H-Tree (``spares.buffer`` and ``spares.maxSinks``).
+        it.
+
+        ``buffers`` is the name of the buffer cell, or a list of names, one per
+        level starting from the sinks, the last one being used for the upper
+        levels. ``maxSinks`` is the maximum number of sinks of each net of the
+        tree, as a single value or a list, in the same way. They default to
+        the H-Tree ones (``spares.buffer`` and ``spares.maxSinks``).
         """
         for item in self.hTreeDatas:
             if item[0] == netName:
@@ -1809,6 +1815,7 @@ class BlockConf ( GaugeConf ):
                                    .format(netName)) )
             return
         self.ctsNets.append( netName )
+        self.ctsOptions[ netName ] = { 'buffers': buffers, 'maxSinks': maxSinks }
         trace( 550,'\tBlockConf.usePostPlacementCts() on "{}"\n'.format( netName ))
 
     def addTrackAvoid ( self, trackAvoid ):

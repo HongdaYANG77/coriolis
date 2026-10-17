@@ -208,32 +208,41 @@ def partitionSinks ( sinkPlugs, maxSinks ):
          + partitionSinks( ordereds[cut:], maxSinks )
 
 
-def buildClockTree ( etesian, net, bufferCell, sliceHeight, maxSinks, maxRows=10 ):
+def buildClockTree ( etesian, net, bufferCells, sliceHeight, maxSinks, maxRows=10 ):
     """
-    Build, after placement, a buffer tree on ``net`` so that no net of the
-    tree drives more than ``maxSinks`` sinks. The tree is built bottom-up:
-    the sinks of ``net`` are partitioned in groups (see partitionSinks()),
-    each group gets its own buffer (see insertBuffer()), then the inputs
-    of those buffers, which are now the sinks of ``net``, are partitioned
-    in turn, until ``net`` itself has at most ``maxSinks`` sinks.
+    Build, after placement, a buffer tree on ``net``. The tree is built
+    bottom-up: the sinks of ``net`` are partitioned in groups (see
+    partitionSinks()), each group gets its own buffer (see insertBuffer()),
+    then the inputs of those buffers, which are now the sinks of ``net``,
+    are partitioned in turn, until ``net`` itself has no more sinks than
+    allowed at that level.
 
-    Buffers are named "cts_<net>_<level>_<index>", level 0 being the one
-    closest to the original sinks.
+    ``bufferCells`` and ``maxSinks`` are either one value, or a list giving
+    the value of each level, starting from the one closest to the original
+    sinks (level 0), the last value being used for all the upper levels.
+
+    Buffers are named "cts_<net>_<level>_<index>".
 
     Return the list of the levels, each level being the list of its
     buffer instances.
     """
-    if maxSinks < 2:
-        raise ErrorMessage( 1, 'cts.buildClockTree(): maxSinks must be at least 2 (got {}).'.format( maxSinks ))
+    def atLevel ( values, level ):
+        if not isinstance(values, (list, tuple)): return values
+        return values[ min(level, len(values)-1) ]
+
+    for value in (maxSinks if isinstance(maxSinks, (list, tuple)) else [maxSinks]):
+        if value < 2:
+            raise ErrorMessage( 1, 'cts.buildClockTree(): maxSinks must be at least 2 (got {}).'.format( value ))
     levels = []
     while True:
-        sinks = getSinks( net )
-        if len(sinks) <= maxSinks: break
+        sinks      = getSinks( net )
+        levelSinks = atLevel( maxSinks, len(levels) )
+        if len(sinks) <= levelSinks: break
         level = []
-        for group in partitionSinks( sinks, maxSinks ):
+        for group in partitionSinks( sinks, levelSinks ):
             name = 'cts_{}_{}_{}'.format( net.getName(), len(levels), len(level) )
-            instance, outputNet = insertBuffer( etesian, net, group, bufferCell, name
-                                              , sliceHeight, maxRows )
+            instance, outputNet = insertBuffer( etesian, net, group, atLevel(bufferCells, len(levels))
+                                              , name, sliceHeight, maxRows )
             if instance is None:
                 raise ErrorMessage( 1, [ 'cts.buildClockTree(): No room left to place buffer "{}" of "{}".' \
                                          .format( name, net.getName() )
