@@ -482,7 +482,7 @@ namespace Etesian {
                                , masterCell
                                , transf
                                , Instance::PlacementStatus::FIXED );
-    _tiles.insert( before, Tile(xmin,width,Occurrence(instance,instancePath)) );
+    _tiles.insert( before, Tile(xmin,masterWidth,Occurrence(instance,instancePath)) );
     cdebug_log(147,0) << "  " << instance << " @" << transf << endl;
 
     cdebug_log(147,0) << "fillerWidth=" << DbU::getValueString(fillerWidth) << endl;
