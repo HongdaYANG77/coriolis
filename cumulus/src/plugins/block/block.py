@@ -32,6 +32,7 @@ from   ..macro.macro      import Macro
 from   .                  import timing
 from   .spares            import Spares
 from   .htree             import HTree
+from   .                  import cts
 #from   . hfns1            import BufferTree
 #from   . hfns2            import BufferTree
 #from   . hfns3            import BufferTree
@@ -582,6 +583,42 @@ class Block ( object ):
                     self.excludedNets.append( net.getName() )
                 trace( 550, '-' )
         Breakpoint.stop( 100, 'Block.addHTrees() on {} done.'.format(self.conf.cellPnR) )
+
+    def excludeCtsNets ( self ):
+        """
+        Keep the nets of the post-placement clock trees out of the placement,
+        as is done for the H-Trees nets.
+        """
+        if not self.conf.ctsNets: return
+        if self.conf.isCoreBlock:
+            raise ErrorMessage( 1, 'Block.excludeCtsNets(): Post-placement clock trees are not supported '
+                                   'on core blocks yet.' )
+        for netName in self.conf.ctsNets:
+            self.etesian.exclude( netName )
+
+    def addCtsTrees ( self ):
+        """
+        Build the post-placement clock trees (see cts.buildClockTree()). Must be
+        called after EtesianEngine.toHurricane(), the buffers are inserted in
+        the feed cells.
+        """
+        if not self.conf.ctsNets: return
+        print( '  o  Building post-placement clock tree(s).' )
+        for netName in self.conf.ctsNets:
+            net = self.conf.cell.getNet( netName )
+            if net is None:
+                print( ErrorMessage( 3, 'Block.addCtsTrees(): Cell "{}" has no clock net "{}".' \
+                                        .format( self.conf.cell.getName(), netName )))
+                continue
+            sinksCount = len( cts.getSinks(net) )
+            levels     = cts.buildClockTree( self.etesian
+                                           , net
+                                           , self.conf.bufferConf.masterCell
+                                           , self.conf.sliceHeight
+                                           , self.conf.bufferConf.maxSinks )
+            dots( 82
+                , '     - "{}", {} sinks'.format( netName, sinksCount )
+                , ' {} buffers, {} levels'.format( sum( len(level) for level in levels ), len(levels) ))
 
     def splitHTrees ( self ):
         """
@@ -1297,6 +1334,7 @@ class Block ( object ):
            #if self.conf.useHFNS: self.findHfnTrees4()
             self.initEtesian()
             self.addHTrees()
+            self.excludeCtsNets()
             sys.stdout.flush()
             sys.stderr.flush()
            #if self.conf.useHFNS: self.addHfnBuffers()
@@ -1309,6 +1347,7 @@ class Block ( object ):
         for trackAvoid in self.conf.trackAvoids:
             self.etesian.addTrackAvoid( trackAvoid )
         self.etesian.toHurricane()
+        self.addCtsTrees()
         self.etesian.flattenPower()
         if self.conf.isCoreBlock: self.doConnectCore()
         pnrStatus = self.route()

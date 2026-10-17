@@ -1621,6 +1621,7 @@ class BlockConf ( GaugeConf ):
         self.deltaAb       = [ 0, 0, 0, 0 ]
         self.useClockTree  = False
         self.hTreeDatas    = [ ]
+        self.ctsNets       = [ ]
         self.useHFNS       = False
         self.useSpares     = True
         self.trackAvoids   = []
@@ -1783,11 +1784,32 @@ class BlockConf ( GaugeConf ):
                 print( WarningMessage( 'block.configuration.useHTree(): Redefinition of "{}" H-Tree ignored.' \
                                        .format(netName)) )
                 return
+        if netName in self.ctsNets:
+            raise ErrorMessage( 1, 'block.configuration.useHTree(): "{}" already has a post-placement clock tree.' \
+                                   .format(netName) )
         self.hTreeDatas.append( [ netName, flags ] );
         net = self.cell.getNet( netName )
         trace( 550,'\tBlockConf.useHTree() on "{}" -> {}\n'.format( netName, net ))
         if net and net.isClock():
             self.useClockTree = True
+
+    def usePostPlacementCts ( self, netName ):
+        """
+        Request a clock tree on ``netName`` built *after* the placement (see
+        plugins.block.cts.buildClockTree()), instead of an H-Tree built before
+        it. The buffer and its maximum number of sinks are the ones of the
+        H-Tree (``spares.buffer`` and ``spares.maxSinks``).
+        """
+        for item in self.hTreeDatas:
+            if item[0] == netName:
+                raise ErrorMessage( 1, 'block.configuration.usePostPlacementCts(): "{}" already has an H-Tree.' \
+                                       .format(netName) )
+        if netName in self.ctsNets:
+            print( WarningMessage( 'block.configuration.usePostPlacementCts(): Redefinition of "{}" ignored.' \
+                                   .format(netName)) )
+            return
+        self.ctsNets.append( netName )
+        trace( 550,'\tBlockConf.usePostPlacementCts() on "{}"\n'.format( netName ))
 
     def addTrackAvoid ( self, trackAvoid ):
         if self.cfg.anabatic.netBuilderStyle == 'VH,2RL':

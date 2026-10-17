@@ -170,3 +170,75 @@ def insertBuffer ( etesian, net, sinkPlugs, bufferCell, name, sliceHeight, maxRo
     trace( 550, '\tcts.insertBuffer(): {} drives {} sinks of "{}" through "{}".\n' \
                 .format( instance, len(sinkPlugs), net.getName(), outputName ))
     return instance, outputNet
+
+
+def getSinks ( net ):
+    """Return the plugs of ``net`` which are not outputs (its sinks)."""
+    return [ plug for plug in net.getPlugs()
+             if not (plug.getMasterNet().getDirection() & Net.Direction.OUT) ]
+
+
+def partitionSinks ( sinkPlugs, maxSinks ):
+    """
+    Split ``sinkPlugs`` in groups of at most ``maxSinks`` geographically
+    close plugs, by recursive bisection. At each step, the plugs are sorted
+    along the larger side of their bounding box and cut so that both sides
+    get a number of groups proportional to their number of plugs. All the
+    groups end up with nearly the same size.
+
+    Return a list of lists of plugs.
+    """
+    groupCount = (len(sinkPlugs) + maxSinks - 1) // maxSinks
+    if groupCount <= 1:
+        return [ sinkPlugs ]
+    centers = {}
+    bb      = Box()
+    for plug in sinkPlugs:
+        center = plug.getInstance().getAbutmentBox().getCenter()
+        centers[ plug.getId() ] = center
+        bb.merge( center )
+    if bb.getWidth() >= bb.getHeight():
+        key = lambda plug: (centers[plug.getId()].getX(), centers[plug.getId()].getY())
+    else:
+        key = lambda plug: (centers[plug.getId()].getY(), centers[plug.getId()].getX())
+    ordereds   = sorted( sinkPlugs, key=key )
+    leftGroups = groupCount // 2
+    cut        = (len(ordereds) * leftGroups) // groupCount
+    return partitionSinks( ordereds[:cut], maxSinks ) \
+         + partitionSinks( ordereds[cut:], maxSinks )
+
+
+def buildClockTree ( etesian, net, bufferCell, sliceHeight, maxSinks, maxRows=10 ):
+    """
+    Build, after placement, a buffer tree on ``net`` so that no net of the
+    tree drives more than ``maxSinks`` sinks. The tree is built bottom-up:
+    the sinks of ``net`` are partitioned in groups (see partitionSinks()),
+    each group gets its own buffer (see insertBuffer()), then the inputs
+    of those buffers, which are now the sinks of ``net``, are partitioned
+    in turn, until ``net`` itself has at most ``maxSinks`` sinks.
+
+    Buffers are named "cts_<net>_<level>_<index>", level 0 being the one
+    closest to the original sinks.
+
+    Return the list of the levels, each level being the list of its
+    buffer instances.
+    """
+    if maxSinks < 2:
+        raise ErrorMessage( 1, 'cts.buildClockTree(): maxSinks must be at least 2 (got {}).'.format( maxSinks ))
+    levels = []
+    while True:
+        sinks = getSinks( net )
+        if len(sinks) <= maxSinks: break
+        level = []
+        for group in partitionSinks( sinks, maxSinks ):
+            name = 'cts_{}_{}_{}'.format( net.getName(), len(levels), len(level) )
+            instance, outputNet = insertBuffer( etesian, net, group, bufferCell, name
+                                              , sliceHeight, maxRows )
+            if instance is None:
+                raise ErrorMessage( 1, [ 'cts.buildClockTree(): No room left to place buffer "{}" of "{}".' \
+                                         .format( name, net.getName() )
+                                       , 'Searched {} rows around the sinks center, please increase free space.' \
+                                         .format( maxRows ) ] )
+            level.append( instance )
+        levels.append( level )
+    return levels
