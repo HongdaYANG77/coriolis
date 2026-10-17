@@ -3,6 +3,7 @@ block = files([
   'bigvia.py',
   'block.py',
   'configuration.py',
+  'cts.py',
   'hfns1.py',
   'hfns2.py',
   'hfns3.py',
