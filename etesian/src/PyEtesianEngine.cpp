@@ -55,6 +55,7 @@ namespace  Etesian {
   using Isobar::PyTypeBox;
   using Isobar::PyCell;
   using Isobar::PyCell_Link;
+  using Isobar::PyTypeCell;
   using Isobar::PyInstance;
   using Isobar::PyInstance_Link;
   using Isobar::PyTypeInstance;
@@ -238,6 +239,27 @@ extern "C" {
       etesian->addTrackAvoid( *PYBOX_O(pyBox) );
     HCATCH
     Py_RETURN_NONE;
+  }
+
+  static PyObject* PyEtesianEngine_insertCellNear ( PyEtesianEngine *self, PyObject* args )
+  {
+    cdebug_log(34,0) << "EtesianEngine.insertCellNear()" << endl;
+    Instance* instance = NULL;
+    HTRY
+      METHOD_HEAD ( "EtesianEngine.insertCellNear()" )
+      PyCell*   pyCell = NULL;
+      char*     name   = NULL;
+      PyBox*    pyBox  = NULL;
+      long long xHint  = 0;
+      if (not PyArg_ParseTuple( args, "O!sO!L:EtesianEngine.insertCellNear"
+                              , &PyTypeCell, &pyCell, &name, &PyTypeBox, &pyBox, &xHint )) {
+        PyErr_SetString( ConstructorError, "EtesianEngine.insertCellNear(): Parameters must be (Cell, str, Box, int)." );
+        return NULL;
+      }
+      instance = etesian->insertCellNear( PYCELL_O(pyCell), name, *PYBOX_O(pyBox), (DbU::Unit)xHint );
+    HCATCH
+    if (not instance) Py_RETURN_NONE;
+    return PyInstance_Link( instance );
   }
 
   // Standart Accessors (Attributes).
@@ -473,6 +495,8 @@ extern "C" {
                             , "Mark a vertical track under which no terminal should be present." }
     , { "toHurricane"       , (PyCFunction)PyEtesianEngine_toHurricane       , METH_NOARGS
                             , "Build the Hurricane post-placement manipulation structure." }
+    , { "insertCellNear"    , (PyCFunction)PyEtesianEngine_insertCellNear    , METH_VARARGS
+                            , "Insert a cell in a feed close to xHint, inside area (after toHurricane())." }
     , { "destroy"           , (PyCFunction)PyEtesianEngine_destroy           , METH_NOARGS
                             , "Destroy the associated hurricane object. The python object remains." }
     , { "orderScanChain"   , (PyCFunction)PyEtesianEngine_orderScanChain   , METH_VARARGS

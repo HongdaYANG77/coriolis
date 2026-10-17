@@ -147,6 +147,8 @@ namespace Etesian {
       inline  void                    exclude                   ( string netName );
               void                    addFeeds                  ();
               void                    toHurricane               ();
+              Instance*               insertCellNear            ( Cell* masterCell, const std::string& name
+                                                                  , const Box& area, DbU::Unit xHint );
               void                    flattenPower              ();
       inline  void                    selectBloat               ( std::string );
       inline  void                    addTrackAvoid             ( const Box& );
