@@ -417,6 +417,82 @@ namespace Etesian {
   }
 
   
+  bool  Slice::_findFeedNear ( DbU::Unit                  width
+                             , const Box&                 area
+                             , DbU::Unit                  xHint
+                             , std::list<Tile>::iterator& iCandidate )
+  {
+    Instance* blockInst      = getEtesian()->getBlockInstance();
+    bool      foundCandidate = false;
+    DbU::Unit dCandidate     = 0;
+    for ( auto iTile=_tiles.begin() ; iTile != _tiles.end() ; ++iTile ) {
+      if ((*iTile).getXMax()  <= area.getXMin()) continue;
+      if ((*iTile).getXMin()  <  area.getXMin()) continue;
+      if ((*iTile).getXMin()  >= area.getXMax()) break;
+      if ((*iTile).getWidth() <  width) continue;
+      cdebug_log(147,0) << "| " << (*iTile) << endl;
+      if (not getEtesian()->getFeedCells().isFeed((*iTile).getInstance())) continue;
+      if (blockInst) {
+        if ((*iTile).getOccurrence().getPath().getHeadInstance() != blockInst) {
+          cdebug_log(147,0) << "> Reject, not in block instance" << endl;
+          continue;
+        }
+      }
+      DbU::Unit distance = std::abs( (*iTile).getXMin() - xHint );
+      if (not foundCandidate or (distance < dCandidate)) {
+        cdebug_log(147,0) << "> candidate" << endl;
+        foundCandidate = true;
+        iCandidate     = iTile;
+        dCandidate     = distance;
+      }
+    }
+    return foundCandidate;
+  }
+
+
+  Instance* Slice::_replaceFeed ( std::list<Tile>::iterator iCandidate
+                                , Cell*                     masterCell
+                                , Cell*                     ownerCell
+                                , const Path&               instancePath
+                                , const std::string&        name
+                                , size_t                    yspin )
+  {
+    auto before = iCandidate;
+    before++;
+
+    DbU::Unit  masterWidth = masterCell->getAbutmentBox().getWidth();
+    DbU::Unit  xmin        = (*iCandidate).getXMin(); 
+    DbU::Unit  width       = (*iCandidate).getWidth(); 
+    DbU::Unit  fillerWidth = width - masterWidth;
+    Instance*  instance    = (*iCandidate).getInstance();
+    Transformation refTransf = instance->getTransformation();
+    _tiles.erase( iCandidate );
+    instance->destroy();
+
+    Transformation  transf = refTransf;
+    if (instancePath.isEmpty())
+      transf = getEtesian()->toCell( transf );
+    // transf = getEtesian()->toBlock( transf );
+    // if (instancePath.isEmpty() and blockInst) {
+    //   Transformation blockTransf = blockInst->getTransformation();
+    //   blockTransf.applyOn( transf );
+    // }
+    instance = Instance::create( ownerCell
+                               , name
+                               , masterCell
+                               , transf
+                               , Instance::PlacementStatus::FIXED );
+    _tiles.insert( before, Tile(xmin,width,Occurrence(instance,instancePath)) );
+    cdebug_log(147,0) << "  " << instance << " @" << transf << endl;
+
+    cdebug_log(147,0) << "fillerWidth=" << DbU::getValueString(fillerWidth) << endl;
+    if (fillerWidth > 0)
+      fillHole( before, xmin+masterWidth, xmin+width, _ybottom, yspin );
+
+    return instance;
+  }
+
+
   Instance* Slice::createDiodeUnder ( RoutingPad* rp, const Box& diodeArea, DbU::Unit xHint, size_t yspin )
   {
     Cell* diode = getEtesian()->getDiodeCell();
@@ -444,75 +520,53 @@ namespace Etesian {
     cdebug_log(147,0) << "rp=" << rp << endl;
     cdebug_log(147,0) << "diodeArea=" << diodeArea << endl;
 
-    Instance* blockInst      = getEtesian()->getBlockInstance();
-    Instance* diodeInst      = NULL;
-    bool      foundCandidate = false;
-    auto      iCandidate     = _tiles.begin();
-    DbU::Unit dCandidate     = 0;
-    for ( auto iTile=_tiles.begin() ; iTile != _tiles.end() ; ++iTile ) {
-      if ((*iTile).getXMax()  <= diodeArea.getXMin()) continue;
-      if ((*iTile).getXMin()  <  diodeArea.getXMin()) continue;
-      if ((*iTile).getXMin()  >= diodeArea.getXMax()) break;
-      if ((*iTile).getWidth() <  diodeWidth) continue;
-      cdebug_log(147,0) << "| " << (*iTile) << endl;
-      if (not getEtesian()->getFeedCells().isFeed((*iTile).getInstance())) continue;
-      if (blockInst) {
-        if ((*iTile).getOccurrence().getPath().getHeadInstance() != blockInst) {
-          cdebug_log(147,0) << "> Reject, not in block instance" << endl;
-          continue;
-        }
-      }
-      DbU::Unit distance = std::abs( (*iTile).getXMin() - xHint );
-      if (not foundCandidate or (distance < dCandidate)) {
-        cdebug_log(147,0) << "> candidate" << endl;
-        foundCandidate = true;
-        iCandidate     = iTile;
-        dCandidate     = distance;
-      }
-    }
-    
-    if (not foundCandidate) {
+    auto iCandidate = _tiles.begin();
+    if (not _findFeedNear(diodeWidth,diodeArea,xHint,iCandidate)) {
       cdebug_log(147,0) << "No candidate found" << endl;
       cdebug_tabw(147,-1);
       return NULL;
     }
 
-    auto before = iCandidate;
-    before++;
-
-    DbU::Unit  xmin        = (*iCandidate).getXMin(); 
-    DbU::Unit  width       = (*iCandidate).getWidth(); 
-    DbU::Unit  fillerWidth = width - diodeWidth;
-    diodeInst = (*iCandidate).getInstance();
-    Transformation refTransf = diodeInst->getTransformation();
-    _tiles.erase( iCandidate );
-    diodeInst->destroy();
-
-    Occurrence      rpOccurrence = rp->getPlugOccurrence();
-    Path            instancePath = rpOccurrence.getPath();
-    Transformation  transf       = refTransf;
-    if (instancePath.isEmpty())
-      transf = getEtesian()->toCell( transf );
-    // transf = getEtesian()->toBlock( transf );
-    // if (instancePath.isEmpty() and blockInst) {
-    //   Transformation blockTransf = blockInst->getTransformation();
-    //   blockTransf.applyOn( transf );
-    // }
-    Plug* plug = static_cast<Plug*>( rpOccurrence.getEntity() );
-    diodeInst = Instance::create( plug->getCell()
-                                , getEtesian()->getUniqueDiodeName()
-                                , diode
-                                , transf
-                                , Instance::PlacementStatus::FIXED );
-    _tiles.insert( before, Tile(xmin,width,Occurrence(diodeInst,instancePath)) );
-    cdebug_log(147,0) << "  " << diodeInst << " @" << transf << endl;
-
-    cdebug_log(147,0) << "fillerWidth=" << DbU::getValueString(fillerWidth) << endl;
-    if (fillerWidth > 0)
-      fillHole( before, xmin+diodeWidth, xmin+width, _ybottom, yspin );
-
+    Occurrence rpOccurrence = rp->getPlugOccurrence();
+    Plug*      plug         = static_cast<Plug*>( rpOccurrence.getEntity() );
+    Instance*  diodeInst    = _replaceFeed( iCandidate
+                                          , diode
+                                          , plug->getCell()
+                                          , rpOccurrence.getPath()
+                                          , getEtesian()->getUniqueDiodeName()
+                                          , yspin );
     cdebug_tabw(147,-1);
     return diodeInst;
+  }
+
+
+  Instance* Slice::insertCellNear ( Cell*              masterCell
+                                  , Cell*              ownerCell
+                                  , const Path&        instancePath
+                                  , const std::string& name
+                                  , const Box&         area
+                                  , DbU::Unit          xHint
+                                  , size_t             yspin )
+  {
+    if (not getEtesian()->getFeedCells().getBiggestFeed()) {
+      cerr << Error("Slice::insertCellNear(): No feed has been registered, ignoring.") << endl;
+      return nullptr;
+    }
+
+    cdebug_log(147,1) << "Slice::insertCellNear(): " << masterCell
+                      << " xHint=" << DbU::getValueString(xHint) << endl;
+    cdebug_log(147,0) << "area=" << area << endl;
+
+    auto iCandidate = _tiles.begin();
+    if (not _findFeedNear(masterCell->getAbutmentBox().getWidth(),area,xHint,iCandidate)) {
+      cdebug_log(147,0) << "No candidate found" << endl;
+      cdebug_tabw(147,-1);
+      return nullptr;
+    }
+
+    Instance* instance = _replaceFeed( iCandidate, masterCell, ownerCell, instancePath, name, yspin );
+    cdebug_tabw(147,-1);
+    return instance;
   }
 
 
@@ -1046,6 +1100,23 @@ namespace Etesian {
 
     size_t islice = (y - _placeArea.getYMin()) / _sliceHeight;
     return _slices[islice]->createDiodeUnder( rp, blockDiodeArea, xHint, islice%2 );
+  }
+
+
+  Instance* Area::insertCellNear ( Cell*              masterCell
+                                 , Cell*              ownerCell
+                                 , const Path&        instancePath
+                                 , const std::string& name
+                                 , const Box&         area
+                                 , DbU::Unit          xHint )
+  {
+    DbU::Unit y = area.getYCenter();
+
+    if ((y < _placeArea.getYMin()) or  (y >= _placeArea.getYMax())) return nullptr;
+    if (not area.intersect(_placeArea)) return nullptr;
+
+    size_t islice = (y - _placeArea.getYMin()) / _sliceHeight;
+    return _slices[islice]->insertCellNear( masterCell, ownerCell, instancePath, name, area, xHint, islice%2 );
   }
 
 
