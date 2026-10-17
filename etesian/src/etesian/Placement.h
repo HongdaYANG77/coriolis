@@ -269,8 +269,9 @@ namespace Etesian {
              Instance*        createDiodeUnder ( RoutingPad*, const Box&, DbU::Unit xHint, size_t yspin );
              Instance*        insertCellNear   ( Cell* masterCell, Cell* ownerCell, const Path&
                                                , const std::string& name, const Box&, DbU::Unit xHint, size_t yspin );
+             bool             _isFreeFeed      ( const Tile& ) const;
              bool             _findFeedNear    ( DbU::Unit width, const Box&, DbU::Unit xHint
-                                               , std::list<Tile>::iterator& candidate );
+                                               , std::list<Tile>::iterator& candidate, bool spanFeeds=false );
              Instance*        _replaceFeed     ( std::list<Tile>::iterator feed, Cell* masterCell, Cell* ownerCell
                                                , const Path&, const std::string& name, size_t yspin );
       inline std::string      _getString       () const;
