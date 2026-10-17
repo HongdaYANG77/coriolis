@@ -610,12 +610,27 @@ class Block ( object ):
                 print( ErrorMessage( 3, 'Block.addCtsTrees(): Cell "{}" has no clock net "{}".' \
                                         .format( self.conf.cell.getName(), netName )))
                 continue
+            options  = self.conf.ctsOptions[ netName ]
+            buffers  = self.conf.bufferConf.masterCell
+            maxSinks = self.conf.bufferConf.maxSinks
+            if options['buffers'] is not None:
+                names   = options['buffers'] if isinstance(options['buffers'], (list, tuple)) \
+                                             else [ options['buffers'] ]
+                buffers = []
+                for name in names:
+                    buffer = self.conf.framework.getCell( name, CRL.Catalog.State.Views )
+                    if buffer is None:
+                        raise ErrorMessage( 1, 'Block.addCtsTrees(): Buffer cell "{}" not found in library.' \
+                                               .format( name ))
+                    buffers.append( buffer )
+            if options['maxSinks'] is not None:
+                maxSinks = options['maxSinks']
             sinksCount = len( cts.getSinks(net) )
             levels     = cts.buildClockTree( self.etesian
                                            , net
-                                           , self.conf.bufferConf.masterCell
+                                           , buffers
                                            , self.conf.sliceHeight
-                                           , self.conf.bufferConf.maxSinks )
+                                           , maxSinks )
             dots( 82
                 , '     - "{}", {} sinks'.format( netName, sinksCount )
                 , ' {} buffers, {} levels'.format( sum( len(level) for level in levels ), len(levels) ))
