@@ -12,6 +12,7 @@ block = files([
   'iospecs.py',
   'matrix.py',
   'meson.build',
+  'nldm.py',
   'pinPlacer.py',
   'rsmt.py',
   'spares.py',
