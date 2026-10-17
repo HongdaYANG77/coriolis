@@ -1230,4 +1230,34 @@ namespace Etesian {
   }
 
 
+  Instance* EtesianEngine::insertCellNear ( Cell*              masterCell
+                                          , const std::string& name
+                                          , const Box&         area
+                                          , DbU::Unit          xHint )
+  {
+    if (not _area) {
+      cerr << Error( "EtesianEngine::insertCellNear(): No placement structure, toHurricane() must be called first." ) << endl;
+      return nullptr;
+    }
+    if (not masterCell) {
+      cerr << Error( "EtesianEngine::insertCellNear(): NULL master cell." ) << endl;
+      return nullptr;
+    }
+
+    Cell* ownerCell = getBlockCell();
+    if (ownerCell->getInstance( name )) {
+      cerr << Error( "EtesianEngine::insertCellNear(): An instance named \"%s\" already exists in %s."
+                   , name.c_str()
+                   , getString(ownerCell).c_str()
+                   ) << endl;
+      return nullptr;
+    }
+
+    Path instancePath;
+    if (getBlockInstance()) instancePath = Path( getBlockInstance() );
+
+    return _area->insertCellNear( masterCell, ownerCell, instancePath, name, area, xHint );
+  }
+
+
 } // Etesian namespace.
