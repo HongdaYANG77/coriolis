@@ -21,6 +21,7 @@
 #include "hurricane/Interval.h"
 #include "hurricane/Instance.h"
 #include "hurricane/Occurrence.h"
+#include "hurricane/Path.h"
 namespace Hurricane {
     class RoutingPad;
 }
@@ -39,6 +40,7 @@ namespace Etesian {
   using Hurricane::Instance;
   using Hurricane::Transformation;
   using Hurricane::Occurrence;
+  using Hurricane::Path;
   class EtesianEngine;
 
 
@@ -265,6 +267,12 @@ namespace Etesian {
              void             trackAvoid       ( DbU::Unit xTrack );
              uint32_t         insertTies       ( DbU::Unit latchUpMax, size_t yspin );
              Instance*        createDiodeUnder ( RoutingPad*, const Box&, DbU::Unit xHint, size_t yspin );
+             Instance*        insertCellNear   ( Cell* masterCell, Cell* ownerCell, const Path&
+                                               , const std::string& name, const Box&, DbU::Unit xHint, size_t yspin );
+             bool             _findFeedNear    ( DbU::Unit width, const Box&, DbU::Unit xHint
+                                               , std::list<Tile>::iterator& candidate );
+             Instance*        _replaceFeed     ( std::list<Tile>::iterator feed, Cell* masterCell, Cell* ownerCell
+                                               , const Path&, const std::string& name, size_t yspin );
       inline std::string      _getString       () const;
              Record*          _getRecord       () const;
     private:
@@ -310,6 +318,8 @@ namespace Etesian {
              void           trackAvoid       ( const Box& trackAvoid );
              uint32_t       insertTies       ();
              Instance*      createDiodeUnder ( RoutingPad*, const Box&, DbU::Unit xHint );
+             Instance*      insertCellNear   ( Cell* masterCell, Cell* ownerCell, const Path&
+                                             , const std::string& name, const Box&, DbU::Unit xHint );
       inline std::string    _getString       () const;
              Record*        _getRecord       () const;
     private:
