@@ -417,26 +417,46 @@ namespace Etesian {
   }
 
   
+  bool  Slice::_isFreeFeed ( const Tile& tile ) const
+  {
+    if (not getEtesian()->getFeedCells().isFeed(tile.getInstance())) return false;
+    Instance* blockInst = getEtesian()->getBlockInstance();
+    if (blockInst and (tile.getOccurrence().getPath().getHeadInstance() != blockInst)) {
+      cdebug_log(147,0) << "> Reject, not in block instance" << endl;
+      return false;
+    }
+    return true;
+  }
+
+
+  // When spanFeeds is set, a run of abutted feeds starting at a tile may be
+  // used if no single feed is wide enough (see _replaceFeed()).
   bool  Slice::_findFeedNear ( DbU::Unit                  width
                              , const Box&                 area
                              , DbU::Unit                  xHint
-                             , std::list<Tile>::iterator& iCandidate )
+                             , std::list<Tile>::iterator& iCandidate
+                             , bool                       spanFeeds )
   {
-    Instance* blockInst      = getEtesian()->getBlockInstance();
     bool      foundCandidate = false;
     DbU::Unit dCandidate     = 0;
     for ( auto iTile=_tiles.begin() ; iTile != _tiles.end() ; ++iTile ) {
       if ((*iTile).getXMax()  <= area.getXMin()) continue;
       if ((*iTile).getXMin()  <  area.getXMin()) continue;
       if ((*iTile).getXMin()  >= area.getXMax()) break;
-      if ((*iTile).getWidth() <  width) continue;
+      if (not spanFeeds and ((*iTile).getWidth() < width)) continue;
       cdebug_log(147,0) << "| " << (*iTile) << endl;
-      if (not getEtesian()->getFeedCells().isFeed((*iTile).getInstance())) continue;
-      if (blockInst) {
-        if ((*iTile).getOccurrence().getPath().getHeadInstance() != blockInst) {
-          cdebug_log(147,0) << "> Reject, not in block instance" << endl;
-          continue;
+      if (not _isFreeFeed(*iTile)) continue;
+      if (spanFeeds) {
+        DbU::Unit runWidth = (*iTile).getWidth();
+        auto      iRun     = iTile;
+        while (runWidth < width) {
+          DbU::Unit xMax = (*iRun).getXMax();
+          if (++iRun == _tiles.end()) break;
+          if ((*iRun).getXMin() != xMax) break;
+          if (not _isFreeFeed(*iRun)) break;
+          runWidth += (*iRun).getWidth();
         }
+        if (runWidth < width) continue;
       }
       DbU::Unit distance = std::abs( (*iTile).getXMin() - xHint );
       if (not foundCandidate or (distance < dCandidate)) {
@@ -457,17 +477,20 @@ namespace Etesian {
                                 , const std::string&        name
                                 , size_t                    yspin )
   {
-    auto before = iCandidate;
-    before++;
-
     DbU::Unit  masterWidth = masterCell->getAbutmentBox().getWidth();
     DbU::Unit  xmin        = (*iCandidate).getXMin(); 
-    DbU::Unit  width       = (*iCandidate).getWidth(); 
-    DbU::Unit  fillerWidth = width - masterWidth;
+    DbU::Unit  width       = 0;
     Instance*  instance    = (*iCandidate).getInstance();
     Transformation refTransf = instance->getTransformation();
-    _tiles.erase( iCandidate );
-    instance->destroy();
+    // Consume as many abutted feeds as needed (only one if it is wide enough).
+    auto before = iCandidate;
+    while (width < masterWidth) {
+      instance = (*before).getInstance();
+      width   += (*before).getWidth();
+      before   = _tiles.erase( before );
+      instance->destroy();
+    }
+    DbU::Unit  fillerWidth = width - masterWidth;
 
     Transformation  transf = refTransf;
     if (instancePath.isEmpty())
@@ -558,7 +581,7 @@ namespace Etesian {
     cdebug_log(147,0) << "area=" << area << endl;
 
     auto iCandidate = _tiles.begin();
-    if (not _findFeedNear(masterCell->getAbutmentBox().getWidth(),area,xHint,iCandidate)) {
+    if (not _findFeedNear(masterCell->getAbutmentBox().getWidth(),area,xHint,iCandidate,true)) {
       cdebug_log(147,0) << "No candidate found" << endl;
       cdebug_tabw(147,-1);
       return nullptr;
