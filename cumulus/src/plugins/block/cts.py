@@ -88,7 +88,7 @@ def placeBufferNear ( etesian, bufferCell, name, position, sliceHeight, maxRows=
     return None
 
 
-def insertBuffer ( etesian, net, sinkPlugs, bufferCell, name, sliceHeight, maxRows=10 ):
+def insertBuffer ( etesian, net, sinkPlugs, bufferCell, name, sliceHeight, maxRows=10, position=None ):
     """
     Insert, after placement, a buffer driving a subset of the sinks of ``net``.
 
@@ -104,8 +104,9 @@ def insertBuffer ( etesian, net, sinkPlugs, bufferCell, name, sliceHeight, maxRo
               |                            +--> sink 2
               +--> other sinks
 
-    The buffer is placed as close as possible to the center of gravity of
-    ``sinkPlugs``, in a feed cell (see placeBufferNear()). The output net
+    The buffer is placed as close as possible to ``position``, by default
+    the center of gravity of ``sinkPlugs``, in feed cells (see
+    placeBufferNear()). The output net
     gets the same type as ``net``, so a clock stays a clock.
 
     If ``net`` has already been flattened (it has RoutingPads), the
@@ -136,8 +137,9 @@ def insertBuffer ( etesian, net, sinkPlugs, bufferCell, name, sliceHeight, maxRo
     bufferInput, bufferOutput = getBufferIos( bufferCell )
 
     with UpdateSession():
-        instance = placeBufferNear( etesian, bufferCell, name, getSinksCenter(sinkPlugs)
-                                  , sliceHeight, maxRows )
+        if position is None:
+            position = getSinksCenter( sinkPlugs )
+        instance = placeBufferNear( etesian, bufferCell, name, position, sliceHeight, maxRows )
         if instance is None:
             return None, None
 
@@ -245,10 +247,19 @@ class BufferSizer ( object ):
     (usually ns and pF), ``wireCapacitance`` being per micron. ``liberty``
     defaults to the one given to Yosys by the PDK setup.
 
+    If ``wireResistance`` (ohm per micron) is given, the sizer also balances
+    the delays, in the spirit of the Deferred-Merge Embedding: the buffer of
+    a group is not put at the center of gravity of its sinks but where the
+    sums of the wire delay to each sink and of the delay already below that
+    sink (zero for a flip-flop, the estimated latency of a lower level
+    buffer) are the closest (see getPosition()).
+
     An instance can be given as the ``bufferCells`` of buildClockTree().
     """
 
-    def __init__ ( self, buffers, maxSlew, wireCapacitance, liberty=None ):
+    GridSize = 25
+
+    def __init__ ( self, buffers, maxSlew, wireCapacitance, liberty=None, wireResistance=None ):
         if liberty is None:
             from ...designflow.yosys import Yosys
             liberty = Yosys._liberty
@@ -257,6 +268,8 @@ class BufferSizer ( object ):
         self.library         = NldmLibrary( str(liberty) )
         self.maxSlew         = maxSlew
         self.wireCapacitance = wireCapacitance
+        self.wireResistance  = wireResistance
+        self.latencies       = {}
         self.missings        = set()
         framework            = AllianceFramework.get()
         self.buffers         = []
@@ -280,14 +293,68 @@ class BufferSizer ( object ):
             return 0.0
         return timing.pins.get( str(plug.getMasterNet().getName()), 0.0 )
 
-    def getLoad ( self, sinkPlugs ):
-        points = [ getSinksCenter(sinkPlugs) ] \
-               + [ plug.getInstance().getAbutmentBox().getCenter() for plug in sinkPlugs ]
+    def getLoad ( self, sinkPlugs, position=None ):
+        if position is None: position = getSinksCenter( sinkPlugs )
+        points = [ position ] + [ plug.getInstance().getAbutmentBox().getCenter() for plug in sinkPlugs ]
         wire   = DbU.toPhysical( getTreeLength(points), DbU.UnitPowerMicro ) * self.wireCapacitance
         return wire + sum( self.getPinCapacitance(plug) for plug in sinkPlugs )
 
-    def __call__ ( self, sinkPlugs ):
-        load = self.getLoad( sinkPlugs )
+    def getArrivals ( self, sinkPlugs, position ):
+        """
+        Estimated delay from ``position`` to the leaves below each sink: the
+        Elmore delay of a direct wire to the sink plus the latency already
+        recorded for its instance (see setLatency()).
+        """
+        arrivals = []
+        for plug in sinkPlugs:
+            center = plug.getInstance().getAbutmentBox().getCenter()
+            length = DbU.toPhysical( abs(center.getX()-position.getX()) + abs(center.getY()-position.getY())
+                                   , DbU.UnitPowerMicro )
+            wire   = self.wireResistance * length \
+                   * (self.wireCapacitance*length/2 + self.getPinCapacitance(plug)) * 1e-3
+            arrivals.append( wire + self.latencies.get( plug.getInstance().getId(), 0.0 ))
+        return arrivals
+
+    def getPosition ( self, sinkPlugs ):
+        """
+        The point, on a GridSize x GridSize grid over the bounding box of the
+        sinks (plus their center of gravity), where the spread of the
+        arrivals (see getArrivals()) is the smallest, ties broken by the
+        total wire length. Without ``wireResistance``, the center of gravity.
+        """
+        center = getSinksCenter( sinkPlugs )
+        if self.wireResistance is None: return center
+        bb = Box()
+        for plug in sinkPlugs: bb.merge( plug.getInstance().getAbutmentBox().getCenter() )
+        candidates = [ center ]
+        for i in range( self.GridSize ):
+            for j in range( self.GridSize ):
+                candidates.append( Point( bb.getXMin() + (bb.getWidth () * i) // (self.GridSize-1)
+                                        , bb.getYMin() + (bb.getHeight() * j) // (self.GridSize-1) ))
+        def cost ( point ):
+            arrivals = self.getArrivals( sinkPlugs, point )
+            length   = sum( abs(p.getInstance().getAbutmentBox().getCenter().getX()-point.getX())
+                          + abs(p.getInstance().getAbutmentBox().getCenter().getY()-point.getY())
+                            for p in sinkPlugs )
+            return ( round(max(arrivals) - min(arrivals), 4), length )
+        return min( candidates, key=cost )
+
+    def setLatency ( self, instance, sinkPlugs ):
+        """
+        Record the estimated latency of the freshly inserted buffer ``instance``
+        driving ``sinkPlugs``: its cell delay plus the mean of the arrivals.
+        """
+        if self.wireResistance is None: return
+        position = instance.getAbutmentBox().getCenter()
+        load     = self.getLoad( sinkPlugs, position )
+        timing   = self.library.getCell( str(instance.getMasterCell().getName()) )
+        delay    = ( timing.lookup('cell_rise', self.maxSlew, load)
+                   + timing.lookup('cell_fall', self.maxSlew, load) ) / 2
+        arrivals = self.getArrivals( sinkPlugs, position )
+        self.latencies[ instance.getId() ] = delay + sum(arrivals) / len(arrivals)
+
+    def __call__ ( self, sinkPlugs, position=None ):
+        load = self.getLoad( sinkPlugs, position )
         for cell, timing in self.buffers:
             output = getBufferIos( cell )[1].getName()
             if load > timing.maxCap.get( str(output), load ): continue
@@ -333,15 +400,23 @@ def buildClockTree ( etesian, net, bufferCells, sliceHeight, maxSinks, maxRows=1
         level = []
         for group in partitionSinks( sinks, levelSinks ):
             name = 'cts_{}_{}_{}'.format( net.getName(), len(levels), len(level) )
-            if callable(bufferCells): bufferCell = bufferCells( group )
-            else:                     bufferCell = atLevel( bufferCells, len(levels) )
+            position = None
+            if isinstance(bufferCells, BufferSizer):
+                position   = bufferCells.getPosition( group )
+                bufferCell = bufferCells( group, position )
+            elif callable(bufferCells):
+                bufferCell = bufferCells( group )
+            else:
+                bufferCell = atLevel( bufferCells, len(levels) )
             instance, outputNet = insertBuffer( etesian, net, group, bufferCell
-                                              , name, sliceHeight, maxRows )
+                                              , name, sliceHeight, maxRows, position )
             if instance is None:
                 raise ErrorMessage( 1, [ 'cts.buildClockTree(): No room left to place buffer "{}" of "{}".' \
                                          .format( name, net.getName() )
                                        , 'Searched {} rows around the sinks center, please increase free space.' \
                                          .format( maxRows ) ] )
+            if isinstance(bufferCells, BufferSizer):
+                bufferCells.setLatency( instance, group )
             level.append( instance )
         levels.append( level )
     return levels
