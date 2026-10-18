@@ -17,9 +17,11 @@ Minimal reader of the NLDM data of a Liberty file: pins capacitances,
 max_capacitance and the delay/transition tables of the timing arcs.
 Cells are parsed only when requested. Tables are stored with the input
 transition as first index and the output load as second, whatever the
-order of the variables of their lu_table_template.
+order of the variables of their lu_table_template, from which the indexes
+are taken when a table does not give its own.
 
-The values are in the units of the Liberty file (usually ns and pF).
+All the values are converted to ns and pF, whatever the time_unit and
+capacitive_load_unit of the Liberty file.
 """
 
 import re
@@ -74,16 +76,29 @@ class NldmLibrary ( object ):
 
     TableKinds = ( 'cell_rise', 'cell_fall', 'rise_transition', 'fall_transition' )
 
+    TimeUnits = { 'fs': 1e-6, 'ps': 1e-3, 'ns': 1.0, 'us': 1e3 }
+    CapUnits  = { 'ff': 1e-3, 'pf': 1.0, 'nf': 1e3 }
+
     def __init__ ( self, path ):
         self.path  = path
         with open( path ) as fd:
             self.text = fd.read()
-        self.cells = {}
-        self.loadFirst = set()
+        self.cells     = {}
+        self.timeScale = 1.0
+        self.capScale  = 1.0
+        unit = re.search( r'time_unit\s*:\s*"?([\d.]+)\s*(\w+)"?', self.text )
+        if unit: self.timeScale = float(unit.group(1)) * self.TimeUnits[ unit.group(2).lower() ]
+        unit = re.search( r'capacitive_load_unit\s*\(\s*([\d.]+)\s*,\s*(\w+)\s*\)', self.text )
+        if unit: self.capScale = float(unit.group(1)) * self.CapUnits[ unit.group(2).lower() ]
+        # Template name -> (loadFirst, index1, index2).
+        self.templates = {}
         for name, body in self._subgroups( self.text, 'lu_table_template' ):
             variable1 = re.search( r'variable_1\s*:\s*(\w+)', body )
-            if variable1 and 'capacitance' in variable1.group(1):
-                self.loadFirst.add( name )
+            index1    = re.search( r'index_1\s*\(\s*"([^"]*)"', body )
+            index2    = re.search( r'index_2\s*\(\s*"([^"]*)"', body )
+            self.templates[ name ] = ( variable1 is not None and 'capacitance' in variable1.group(1)
+                                     , self._floats(index1.group(1)) if index1 else [ 0.0 ]
+                                     , self._floats(index2.group(1)) if index2 else [ 0.0 ] )
 
     @staticmethod
     def _group ( text, start ):
@@ -118,9 +133,9 @@ class NldmLibrary ( object ):
         body = self._group( self.text, m.start() )
         for pinName, pinBody in self._subgroups( body, 'pin' ):
             cap = re.search( r'(?m)^\s*capacitance\s*:\s*([\d.eE+-]+)', pinBody )
-            cell.pins[ pinName ] = float(cap.group(1)) if cap else 0.0
+            cell.pins[ pinName ] = float(cap.group(1))*self.capScale if cap else 0.0
             maxCap = re.search( r'max_capacitance\s*:\s*([\d.eE+-]+)', pinBody )
-            if maxCap: cell.maxCap[ pinName ] = float(maxCap.group(1))
+            if maxCap: cell.maxCap[ pinName ] = float(maxCap.group(1))*self.capScale
             for _, timing in self._subgroups( pinBody, 'timing' ):
                 related = re.search( r'related_pin\s*:\s*"?(\w+)"?', timing )
                 related = related.group(1) if related else None
@@ -128,13 +143,17 @@ class NldmLibrary ( object ):
                     for template, table in self._subgroups( timing, kind ):
                         values = re.search( r'values\s*\((.*?)\)\s*;', table, re.S ).group(1)
                         values = [ self._floats(row) for row in re.findall( r'"([^"]*)"', values ) ]
-                        index1 = re.search( r'index_1\s*\(\s*"([^"]*)"', table )
-                        index2 = re.search( r'index_2\s*\(\s*"([^"]*)"', table )
-                        index1 = self._floats(index1.group(1)) if index1 else [ 0.0 ]
-                        index2 = self._floats(index2.group(1)) if index2 else [ 0.0 ]
-                        if template in self.loadFirst:
+                        loadFirst, index1, index2 = self.templates.get( template, (False, [0.0], [0.0]) )
+                        own1   = re.search( r'index_1\s*\(\s*"([^"]*)"', table )
+                        own2   = re.search( r'index_2\s*\(\s*"([^"]*)"', table )
+                        if own1: index1 = self._floats( own1.group(1) )
+                        if own2: index2 = self._floats( own2.group(1) )
+                        if loadFirst:
                             index1, index2 = index2, index1
                             values = [ list(column) for column in zip(*values) ]
+                        index1 = [ v*self.timeScale for v in index1 ]
+                        index2 = [ v*self.capScale  for v in index2 ]
+                        values = [ [ v*self.timeScale for v in row ] for row in values ]
                         cell.tables[ (related, pinName, kind) ] = (index1, index2, values)
         self.cells[name] = cell
         return cell
