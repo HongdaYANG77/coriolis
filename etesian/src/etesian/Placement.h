@@ -273,7 +273,9 @@ namespace Etesian {
              bool             _findFeedNear    ( DbU::Unit width, const Box&, DbU::Unit xHint
                                                , std::list<Tile>::iterator& candidate, bool spanFeeds=false );
              Instance*        _replaceFeed     ( std::list<Tile>::iterator feed, Cell* masterCell, Cell* ownerCell
-                                               , const Path&, const std::string& name, size_t yspin );
+                                               , const Path&, const std::string& name, size_t yspin
+                                               , Cell* sideTie=nullptr );
+             void             _insertTie       ( std::list<Tile>::iterator before, Cell* tie, DbU::Unit x, size_t yspin );
       inline std::string      _getString       () const;
              Record*          _getRecord       () const;
     private:

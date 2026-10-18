@@ -470,29 +470,56 @@ namespace Etesian {
   }
 
 
+  void  Slice::_insertTie ( std::list<Tile>::iterator before, Cell* tie, DbU::Unit x, size_t yspin )
+  {
+    Point     blockPoint = getEtesian()->toBlock( Point(x,_ybottom) );
+    Instance* instance   = Instance::create
+      ( getEtesian()->getBlockCell()
+      , getEtesian()->getFeedCells().getUniqueInstanceName().c_str()
+      , tie
+      , getTransformation( tie->getAbutmentBox()
+                         , blockPoint.getX()
+                         , blockPoint.getY()
+                         , (yspin) ? Transformation::Orientation::MY
+                                   : Transformation::Orientation::ID )
+      , Instance::PlacementStatus::PLACED );
+    _tiles.insert( before, Tile( x, tie->getAbutmentBox().getWidth()
+                               , getEtesian()->toCell( Occurrence(instance) )));
+    cdebug_log(147,0) << "  Tie " << instance << " @" << instance->getTransformation() << endl;
+  }
+
+
+  // If sideTie is given, the cell is put between two ties, so it never
+  // lengthens the run of cells of its neighbors (latch-up distance).
   Instance* Slice::_replaceFeed ( std::list<Tile>::iterator iCandidate
                                 , Cell*                     masterCell
                                 , Cell*                     ownerCell
                                 , const Path&               instancePath
                                 , const std::string&        name
-                                , size_t                    yspin )
+                                , size_t                    yspin
+                                , Cell*                     sideTie )
   {
     DbU::Unit  masterWidth = masterCell->getAbutmentBox().getWidth();
+    DbU::Unit  tieWidth    = (sideTie) ? sideTie->getAbutmentBox().getWidth() : 0;
+    DbU::Unit  needed      = masterWidth + 2*tieWidth;
     DbU::Unit  xmin        = (*iCandidate).getXMin(); 
     DbU::Unit  width       = 0;
     Instance*  instance    = (*iCandidate).getInstance();
     Transformation refTransf = instance->getTransformation();
     // Consume as many abutted feeds as needed (only one if it is wide enough).
     auto before = iCandidate;
-    while (width < masterWidth) {
+    while (width < needed) {
       instance = (*before).getInstance();
       width   += (*before).getWidth();
       before   = _tiles.erase( before );
       instance->destroy();
     }
-    DbU::Unit  fillerWidth = width - masterWidth;
+    DbU::Unit  fillerWidth = width - needed;
 
-    Transformation  transf = refTransf;
+    if (sideTie) _insertTie( before, sideTie, xmin, yspin );
+    Transformation  transf = Transformation( refTransf.getTx() + tieWidth
+                                           , refTransf.getTy()
+                                           , refTransf.getOrientation() );
     if (instancePath.isEmpty())
       transf = getEtesian()->toCell( transf );
     // transf = getEtesian()->toBlock( transf );
@@ -505,12 +532,13 @@ namespace Etesian {
                                , masterCell
                                , transf
                                , Instance::PlacementStatus::FIXED );
-    _tiles.insert( before, Tile(xmin,masterWidth,Occurrence(instance,instancePath)) );
+    _tiles.insert( before, Tile(xmin+tieWidth,masterWidth,Occurrence(instance,instancePath)) );
     cdebug_log(147,0) << "  " << instance << " @" << transf << endl;
+    if (sideTie) _insertTie( before, sideTie, xmin+tieWidth+masterWidth, yspin );
 
     cdebug_log(147,0) << "fillerWidth=" << DbU::getValueString(fillerWidth) << endl;
     if (fillerWidth > 0)
-      fillHole( before, xmin+masterWidth, xmin+width, _ybottom, yspin );
+      fillHole( before, xmin+needed, xmin+width, _ybottom, yspin );
 
     return instance;
   }
@@ -580,14 +608,29 @@ namespace Etesian {
                       << " xHint=" << DbU::getValueString(xHint) << endl;
     cdebug_log(147,0) << "area=" << area << endl;
 
+    // With a tie cell, the inserted cell is put between two ties (latch-up).
+    Cell*     tie        = getEtesian()->getFeedCells().getTie();
+    DbU::Unit width      = masterCell->getAbutmentBox().getWidth();
+    DbU::Unit tieWidth   = (tie) ? tie->getAbutmentBox().getWidth() : 0;
+    DbU::Unit latchUpMax = getEtesian()->getLatchUpMax();
+    if (tie and latchUpMax and (width > latchUpMax)) {
+      cerr << Error( "Slice::insertCellNear(): %s is wider than the latch-up distance (%s > %s)."
+                   , getString(masterCell->getName()).c_str()
+                   , DbU::getValueString(width).c_str()
+                   , DbU::getValueString(latchUpMax).c_str()
+                   ) << endl;
+      cdebug_tabw(147,-1);
+      return nullptr;
+    }
+
     auto iCandidate = _tiles.begin();
-    if (not _findFeedNear(masterCell->getAbutmentBox().getWidth(),area,xHint,iCandidate,true)) {
+    if (not _findFeedNear(width+2*tieWidth,area,xHint-tieWidth,iCandidate,true)) {
       cdebug_log(147,0) << "No candidate found" << endl;
       cdebug_tabw(147,-1);
       return nullptr;
     }
 
-    Instance* instance = _replaceFeed( iCandidate, masterCell, ownerCell, instancePath, name, yspin );
+    Instance* instance = _replaceFeed( iCandidate, masterCell, ownerCell, instancePath, name, yspin, tie );
     cdebug_tabw(147,-1);
     return instance;
   }
