@@ -295,12 +295,23 @@ class BufferSizer ( object ):
     sink (zero for a flip-flop, the estimated latency of a lower level
     buffer) are the closest (see getPosition()).
 
+    With ``matchLatencies``, the buffers of one level are chosen together
+    (see sizeLevel()): among the ones meeting ``maxSlew``, each group gets
+    the buffer that brings its estimated latency closest to the latencies
+    of the other groups of the level. As the wire delays are often small
+    compared to the differences of the buffer delays under different
+    loads, this may balance the tree better than the positions.
+    ``Tolerance`` (in the time unit of the Liberty file) is the extra spread
+    accepted on a level to use smaller buffers.
+
     An instance can be given as the ``bufferCells`` of buildClockTree().
     """
 
-    GridSize = 25
+    GridSize  = 25
+    Tolerance = 0.005
 
-    def __init__ ( self, buffers, maxSlew, wireCapacitance, liberty=None, wireResistance=None ):
+    def __init__ ( self, buffers, maxSlew, wireCapacitance, liberty=None, wireResistance=None
+                 , matchLatencies=False ):
         if liberty is None:
             from ...designflow.yosys import Yosys
             liberty = Yosys._liberty
@@ -310,6 +321,7 @@ class BufferSizer ( object ):
         self.maxSlew         = maxSlew
         self.wireCapacitance = wireCapacitance
         self.wireResistance  = wireResistance
+        self.matchLatencies  = matchLatencies
         self.latencies       = {}
         self.missings        = set()
         framework            = AllianceFramework.get()
@@ -343,16 +355,19 @@ class BufferSizer ( object ):
     def getArrivals ( self, sinkPlugs, position ):
         """
         Estimated delay from ``position`` to the leaves below each sink: the
-        Elmore delay of a direct wire to the sink plus the latency already
-        recorded for its instance (see setLatency()).
+        Elmore delay of a direct wire to the sink (none without
+        ``wireResistance``) plus the latency already recorded for its
+        instance (see setLatency()).
         """
         arrivals = []
         for plug in sinkPlugs:
-            center = plug.getInstance().getAbutmentBox().getCenter()
-            length = DbU.toPhysical( abs(center.getX()-position.getX()) + abs(center.getY()-position.getY())
-                                   , DbU.UnitPowerMicro )
-            wire   = self.wireResistance * length \
-                   * (self.wireCapacitance*length/2 + self.getPinCapacitance(plug)) * 1e-3
+            wire = 0.0
+            if self.wireResistance is not None:
+                center = plug.getInstance().getAbutmentBox().getCenter()
+                length = DbU.toPhysical( abs(center.getX()-position.getX()) + abs(center.getY()-position.getY())
+                                       , DbU.UnitPowerMicro )
+                wire   = self.wireResistance * length \
+                       * (self.wireCapacitance*length/2 + self.getPinCapacitance(plug)) * 1e-3
             arrivals.append( wire + self.latencies.get( plug.getInstance().getId(), 0.0 ))
         return arrivals
 
@@ -385,23 +400,98 @@ class BufferSizer ( object ):
         Record the estimated latency of the freshly inserted buffer ``instance``
         driving ``sinkPlugs``: its cell delay plus the mean of the arrivals.
         """
-        if self.wireResistance is None: return
+        if self.wireResistance is None and not self.matchLatencies: return
         position = instance.getAbutmentBox().getCenter()
         load     = self.getLoad( sinkPlugs, position )
         timing   = self.library.getCell( str(instance.getMasterCell().getName()) )
-        delay    = ( timing.lookup('cell_rise', self.maxSlew, load)
-                   + timing.lookup('cell_fall', self.maxSlew, load) ) / 2
         arrivals = self.getArrivals( sinkPlugs, position )
-        self.latencies[ instance.getId() ] = delay + sum(arrivals) / len(arrivals)
+        self.latencies[ instance.getId() ] = self.getDelay( timing, load ) + sum(arrivals) / len(arrivals)
+
+    def getDelay ( self, timing, load ):
+        """Mean of the rise and fall delays of a buffer under ``load``."""
+        return ( timing.lookup('cell_rise', self.maxSlew, load)
+               + timing.lookup('cell_fall', self.maxSlew, load) ) / 2
+
+    def getSlew ( self, timing, load ):
+        """Worst of the rise and fall output transitions of a buffer under ``load``."""
+        return max( timing.lookup('rise_transition', self.maxSlew, load)
+                  , timing.lookup('fall_transition', self.maxSlew, load) )
+
+    def fits ( self, cell, timing, load, maxSlew=None ):
+        """
+        Whether a buffer can drive ``load`` within its max_capacitance and
+        ``maxSlew`` (by default, the one of the sizer).
+        """
+        if maxSlew is None: maxSlew = self.maxSlew
+        output = getBufferIos( cell )[1].getName()
+        if load > timing.maxCap.get( str(output), load ): return False
+        return self.getSlew( timing, load ) <= maxSlew
+
+    def sizeLevel ( self, groups, positions ):
+        """
+        Return the buffer cell of each group of sinks of one level, its buffer
+        being put at the matching position. Without ``matchLatencies``, each
+        group gets its own smallest fitting buffer (see __call__()).
+
+        With ``matchLatencies``, every fitting buffer of every group is a
+        candidate (the strongest one if none fits), its latency being its
+        delay plus the mean of the arrivals below (see getArrivals()). If
+        even the strongest buffer exceeds ``maxSlew`` for some group, the
+        limit of the whole level is raised to its slew: this does not worsen
+        the worst slew of the level and allows the lightly loaded groups to
+        use slower buffers to match the heavily loaded ones. The
+        candidates are sorted by latency and, for each window of consecutive
+        candidates holding at least one per group, each group takes its
+        smallest buffer inside the window. Among the choices whose spread
+        of latencies is within ``Tolerance`` of the smallest one, the
+        retained choice is the one with the smallest total input capacitance
+        (the smallest buffers).
+        """
+        if not self.matchLatencies:
+            return [ self(group, position) for group, position in zip(groups, positions) ]
+        loads     = [ self.getLoad( group, position ) for group, position in zip(groups, positions) ]
+        levelSlew = max( [ self.maxSlew ] + [ self.getSlew( self.buffers[-1][1], load ) for load in loads ] )
+        candidates = []
+        for i, (group, position) in enumerate( zip(groups, positions) ):
+            load     = loads[i]
+            arrivals = self.getArrivals( group, position )
+            below    = sum(arrivals) / len(arrivals)
+            fitting  = [ j for j, (cell, timing) in enumerate(self.buffers)
+                         if self.fits(cell, timing, load, levelSlew) ]
+            if not fitting: fitting = [ len(self.buffers)-1 ]
+            for j in fitting:
+                candidates.append( (self.getDelay(self.buffers[j][1], load) + below, i, j) )
+        candidates.sort()
+        choices = []
+        counts  = [ 0 ] * len(groups)
+        covered = 0
+        right   = 0
+        for left in range( len(candidates) ):
+            while covered < len(groups) and right < len(candidates):
+                i = candidates[right][1]
+                if not counts[i]: covered += 1
+                counts[i] += 1
+                right     += 1
+            if covered < len(groups): break
+            choice = {}
+            for latency, i, j in candidates[left:right]:
+                if i not in choice or j < choice[i][1]: choice[i] = (latency, j)
+            latencies = [ latency for latency, j in choice.values() ]
+            capacity  = sum( sum(self.buffers[j][1].pins.values()) for latency, j in choice.values() )
+            choices.append( (max(latencies) - min(latencies), capacity, choice) )
+            i = candidates[left][1]
+            counts[i] -= 1
+            if not counts[i]: covered -= 1
+        spread = min( choices, key=lambda item: item[0] )[0]
+        best   = min( [ item for item in choices if item[0] <= spread + self.Tolerance ]
+                    , key=lambda item: (item[1], item[0]) )
+        trace( 550, '\tcts.BufferSizer.sizeLevel(): {} groups, spread {:.4f}\n'.format( len(groups), best[0] ))
+        return [ self.buffers[ best[2][i][1] ][0] for i in range(len(groups)) ]
 
     def __call__ ( self, sinkPlugs, position=None ):
         load = self.getLoad( sinkPlugs, position )
         for cell, timing in self.buffers:
-            output = getBufferIos( cell )[1].getName()
-            if load > timing.maxCap.get( str(output), load ): continue
-            slew = max( timing.lookup('rise_transition', self.maxSlew, load)
-                      , timing.lookup('fall_transition', self.maxSlew, load) )
-            if slew <= self.maxSlew:
+            if self.fits( cell, timing, load ):
                 return cell
         return self.buffers[-1][0]
 
@@ -443,13 +533,17 @@ def buildClockTree ( etesian, net, bufferCells, sliceHeight, maxSinks, maxRows=1
         sinks      = getSinks( net )
         levelSinks = atLevel( maxSinks, len(levels) )
         if len(sinks) <= levelSinks: break
-        level = []
-        for group in partitionSinks( sinks, levelSinks ):
+        level  = []
+        groups = partitionSinks( sinks, levelSinks )
+        if isinstance(bufferCells, BufferSizer):
+            positions = [ bufferCells.getPosition( group ) for group in groups ]
+            sizes     = bufferCells.sizeLevel( groups, positions )
+        for index, group in enumerate( groups ):
             name = 'cts_{}_{}_{}'.format( net.getName(), len(levels), len(level) )
             position = None
             if isinstance(bufferCells, BufferSizer):
-                position   = bufferCells.getPosition( group )
-                bufferCell = bufferCells( group, position )
+                position   = positions[ index ]
+                bufferCell = sizes    [ index ]
             elif callable(bufferCells):
                 bufferCell = bufferCells( group )
             else:
