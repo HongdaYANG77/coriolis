@@ -1212,13 +1212,13 @@ namespace Etesian {
   }
 
 
-  void  EtesianEngine::place ()
+  bool  EtesianEngine::_placeBegin ()
   {
     if (getBlockCell()->isPlaced()) {
       cerr << Warning( "EtesianEngine::place(): The cell \"%s\" is already placed (aborting)"
                      , getString(getBlockCell()->getName()).c_str()
                      ) << std::endl;
-      return;
+      return false;
     }
     getBlockCell()->uniquify();
 
@@ -1230,7 +1230,7 @@ namespace Etesian {
     }
 
   //findYSpin();
-    if (not toColoquinte()) return;
+    if (not toColoquinte()) return false;
 
     cmess1 << "  o  Running Coloquinte." << endl;
     startMeasures();
@@ -1239,7 +1239,12 @@ namespace Etesian {
 
     cmess1 << "  o  Global placement (effort " << getPlaceEffort() << ")" << endl;
     globalPlace();
+    return true;
+  }
 
+
+  void  EtesianEngine::_placeEnd ()
+  {
     cmess1 << "  o  Detailed Placement (effort " << getPlaceEffort() << ")" << endl;
     detailedPlace();
 
@@ -1265,6 +1270,64 @@ namespace Etesian {
         instance->setPlacementStatus( Instance::PlacementStatus::PLACED );
     }
     UpdateSession::close();
+  }
+
+
+  void  EtesianEngine::place ()
+  {
+    if (_placeBegin()) _placeEnd();
+  }
+
+
+  // First half of place(): the global placement only. The (overlapping)
+  // positions it gives are copied into the instances, so the netlist can be
+  // modified (cells added and moved) before calling placeLegalize().
+  void  EtesianEngine::placeGlobal ()
+  {
+    if (not _placeBegin()) return;
+    _updatePlacement( _placementUB, NoFlags );
+  }
+
+
+  // Second half of place(): the Coloquinte circuit is rebuilt from the
+  // current netlist and positions of the instances, then legalized and
+  // detail placed.
+  //
+  // Cells connected to no placed net (like the buffers of a clock tree, whose
+  // nets are excluded) cost nothing wherever they are, so the detailed
+  // placement would swap them anywhere. They are fixed where the legalization
+  // puts them, before the detailed placement.
+  void  EtesianEngine::placeLegalize ()
+  {
+    if (not _circuit) {
+      cerr << Error( "EtesianEngine::placeLegalize(): placeGlobal() must be called first." ) << endl;
+      return;
+    }
+    cmess1 << "  o  Rebuilding Coloquinte from the global placement." << endl;
+    if (not toColoquinte()) return;
+
+    vector<bool> connecteds ( _circuit->nbCells(), false );
+    for ( int inet=0 ; inet < _circuit->nbNets() ; ++inet ) {
+      for ( int ipin=0 ; ipin < _circuit->nbPinsNet(inet) ; ++ipin )
+        connecteds[ _circuit->pinCell(inet,ipin) ] = true;
+    }
+    vector<bool> isFixed       = _circuit->cellIsFixed();
+    vector<bool> isObstruction = _circuit->cellIsObstruction();
+    size_t       unconnecteds  = 0;
+    for ( size_t icell=0 ; icell < connecteds.size() ; ++icell ) {
+      if (connecteds[icell] or isFixed[icell]) continue;
+      isFixed      [icell] = true;
+      isObstruction[icell] = true;
+      ++unconnecteds;
+    }
+    if (unconnecteds) {
+      cmess1 << "  o  Legalization (effort " << getPlaceEffort() << ")" << endl;
+      _circuit->legalize( coloquinte::ColoquinteParameters( getPlaceEffort() ));
+      _circuit->setCellIsFixed      ( isFixed );
+      _circuit->setCellIsObstruction( isObstruction );
+      cmess1 << ::Dots::asUInt( "     - Unconnected cells fixed", unconnecteds ) << endl;
+    }
+    _placeEnd();
   }
 
 

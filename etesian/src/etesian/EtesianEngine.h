@@ -141,6 +141,8 @@ namespace Etesian {
               void                    globalPlace               ();
               void                    detailedPlace             ();
               void                    place                     ();
+              void                    placeGlobal               ();
+              void                    placeLegalize             ();
               uint32_t                doHFNS                    ();
       inline  void                    useFeed                   ( Cell* );
               size_t                  findYSpin                 ();
@@ -206,6 +208,8 @@ namespace Etesian {
       inline  uint32_t       _getNewDiodeId   ();
               Instance*      _createDiode     ( Cell* );
               void           _updatePlacement ( const coloquinte::PlacementSolution*, uint32_t flags );
+             bool           _placeBegin      ();
+             void           _placeEnd        ();
               void           _checkNotAFeed   ( Occurrence occurrence ) const;
   };
 

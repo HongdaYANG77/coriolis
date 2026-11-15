@@ -226,6 +226,42 @@ extern "C" {
   }
 
 
+  static PyObject* PyEtesianEngine_placeGlobal ( PyEtesianEngine* self )
+  {
+    cdebug_log(34,0) << "PyEtesianEngine_placeGlobal()" << endl;
+    HTRY
+    METHOD_HEAD("EtesianEngine.placeGlobal()")
+    if (etesian->getViewer()) {
+      if (ExceptionWidget::catchAllWrapper( std::bind(&EtesianEngine::placeGlobal,etesian) )) {
+        PyErr_SetString( HurricaneError, "EtesianEngine::placeGlobal() has thrown an exception (C++)." );
+        return NULL;
+      }
+    } else {
+      etesian->placeGlobal();
+    }
+    HCATCH
+    Py_RETURN_NONE;
+  }
+
+
+  static PyObject* PyEtesianEngine_placeLegalize ( PyEtesianEngine* self )
+  {
+    cdebug_log(34,0) << "PyEtesianEngine_placeLegalize()" << endl;
+    HTRY
+    METHOD_HEAD("EtesianEngine.placeLegalize()")
+    if (etesian->getViewer()) {
+      if (ExceptionWidget::catchAllWrapper( std::bind(&EtesianEngine::placeLegalize,etesian) )) {
+        PyErr_SetString( HurricaneError, "EtesianEngine::placeLegalize() has thrown an exception (C++)." );
+        return NULL;
+      }
+    } else {
+      etesian->placeLegalize();
+    }
+    HCATCH
+    Py_RETURN_NONE;
+  }
+
+
   static PyObject* PyEtesianEngine_addTrackAvoid ( PyEtesianEngine *self, PyObject* args )
   {
     cdebug_log(34,0) << "EtesianEngine.addTrackAvoid()" << endl;
@@ -487,6 +523,10 @@ extern "C" {
                             , "De-allocate the Coloquinte related data structures." }
     , { "place"             , (PyCFunction)PyEtesianEngine_place             , METH_NOARGS
                             , "Run the placer (Etesian)." }
+    , { "placeGlobal"       , (PyCFunction)PyEtesianEngine_placeGlobal       , METH_NOARGS
+                            , "Run the global placement only (first half of place())." }
+    , { "placeLegalize"     , (PyCFunction)PyEtesianEngine_placeLegalize     , METH_NOARGS
+                            , "Legalize and detail place, after placeGlobal() (second half of place())." }
     , { "flattenPower"      , (PyCFunction)PyEtesianEngine_flattenPower      , METH_NOARGS
                             , "Build abstract interface in top cell for supply & blockages." }
     , { "doHFNS"            , (PyCFunction)PyEtesianEngine_doHFNS            , METH_NOARGS
