@@ -67,25 +67,33 @@ def getSinksCenter ( sinkPlugs ):
 def placeBufferNear ( etesian, bufferCell, name, position, sliceHeight, maxRows=10 ):
     """
     Insert ``bufferCell`` in the placed rows, as close as possible to
-    ``position``. The row of ``position`` is tried first, then the rows
-    above and below it, alternately, up to ``maxRows`` rows away. In each
-    row, the feed closest to the requested abscissa is used.
+    ``position``. The search is done in a window around ``position``,
+    starting at two rows wide and doubled until room is found, up to the
+    whole width of the cell. In a window, the row of ``position`` is tried
+    first, then the rows above and below it, alternately, as long as they
+    are inside the window and at most ``maxRows`` rows away. In each row,
+    the feed closest to the requested abscissa is used. So a near feed in
+    the next row is preferred over a far one in the row of ``position``.
 
     Return the new instance, or None if no room has been found.
     """
     cellAb = etesian.getCell().getAbutmentBox()
     xHint  = position.getX() - bufferCell.getAbutmentBox().getWidth() // 2
-    for distance in range( maxRows+1 ):
-        for side in ((0,) if distance == 0 else (1,-1)):
-            y = position.getY() + side*distance*sliceHeight
-            if y < cellAb.getYMin() or y >= cellAb.getYMax(): continue
-            area     = Box( cellAb.getXMin(), y - sliceHeight//4
-                          , cellAb.getXMax(), y + sliceHeight//4 )
-            instance = etesian.insertCellNear( bufferCell, name, area, xHint )
-            if instance:
-                trace( 550, '\tcts.placeBufferNear(): {} at {}\n'.format( instance, area ))
-                return instance
-    return None
+    window = 2*sliceHeight
+    while True:
+        for distance in range( maxRows+1 ):
+            if distance*sliceHeight > window: break
+            for side in ((0,) if distance == 0 else (1,-1)):
+                y = position.getY() + side*distance*sliceHeight
+                if y < cellAb.getYMin() or y >= cellAb.getYMax(): continue
+                area     = Box( max( cellAb.getXMin(), xHint-window ), y - sliceHeight//4
+                              , min( cellAb.getXMax(), xHint+window ), y + sliceHeight//4 )
+                instance = etesian.insertCellNear( bufferCell, name, area, xHint )
+                if instance:
+                    trace( 550, '\tcts.placeBufferNear(): {} at {}\n'.format( instance, area ))
+                    return instance
+        if window >= cellAb.getWidth(): return None
+        window *= 2
 
 
 def insertBuffer ( etesian, net, sinkPlugs, bufferCell, name, sliceHeight, maxRows=10, position=None ):
