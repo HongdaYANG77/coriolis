@@ -13,19 +13,26 @@
 # +-----------------------------------------------------------------+
 
 """
-Post-placement buffering utilities, building blocks for a clock tree
-synthesis performed *after* the placement.
+Placement driven buffering utilities, building blocks for a clock tree
+synthesis performed either:
 
-The placement must be completed and EtesianEngine.toHurricane() must have
-been called, so the rows are filled with feed cells. Buffers are inserted
-by replacing feed cells (see EtesianEngine.insertCellNear()), so the
-placement of the other cells is never modified.
+* *After* the placement. The placement must be completed and
+  EtesianEngine.toHurricane() must have been called, so the rows are
+  filled with feed cells. Buffers are inserted by replacing feed cells
+  (see EtesianEngine.insertCellNear()), so the placement of the other
+  cells is never modified.
+
+* *Between* the global placement and the legalization (``legalized=False``,
+  see EtesianEngine.placeGlobal() and EtesianEngine.placeLegalize()).
+  Buffers are put exactly where they are wanted, over the other cells,
+  and the legalization makes room for them.
 
 Only flat designs are supported for now: the net to buffer must belong
 to the cell placed by Etesian (no block instance).
 """
 
-from ...Hurricane       import DbU, Box, Point, Net, RoutingPad, Occurrence
+from ...Hurricane       import DbU, Box, Point, Transformation, Net, Instance, \
+                               RoutingPad, Occurrence
 from ...CRL             import AllianceFramework, Catalog
 from ...helpers         import trace
 from ...helpers.io      import ErrorMessage, WarningMessage
@@ -96,7 +103,29 @@ def placeBufferNear ( etesian, bufferCell, name, position, sliceHeight, maxRows=
         window *= 2
 
 
-def insertBuffer ( etesian, net, sinkPlugs, bufferCell, name, sliceHeight, maxRows=10, position=None ):
+def createBufferAt ( etesian, bufferCell, name, position ):
+    """
+    Create ``bufferCell`` centered on ``position``, whatever the cells
+    already there. To be used between EtesianEngine.placeGlobal() and
+    EtesianEngine.placeLegalize(), the legalization will make room for it.
+
+    Return the new instance.
+    """
+    cell = etesian.getCell()
+    if cell.getInstance( name ):
+        raise ErrorMessage( 1, 'cts.createBufferAt(): An instance named "{}" already exists in "{}".' \
+                               .format( name, cell.getName() ))
+    ab     = bufferCell.getAbutmentBox()
+    transf = Transformation( position.getX() - ab.getXMin() - ab.getWidth ()//2
+                           , position.getY() - ab.getYMin() - ab.getHeight()//2
+                           , Transformation.Orientation.ID )
+    instance = Instance.create( cell, name, bufferCell, transf, Instance.PlacementStatus.PLACED )
+    trace( 550, '\tcts.createBufferAt(): {} at {}\n'.format( instance, position ))
+    return instance
+
+
+def insertBuffer ( etesian, net, sinkPlugs, bufferCell, name, sliceHeight, maxRows=10, position=None
+                 , legalized=True ):
     """
     Insert, after placement, a buffer driving a subset of the sinks of ``net``.
 
@@ -114,8 +143,9 @@ def insertBuffer ( etesian, net, sinkPlugs, bufferCell, name, sliceHeight, maxRo
 
     The buffer is placed as close as possible to ``position``, by default
     the center of gravity of ``sinkPlugs``, in feed cells (see
-    placeBufferNear()). The output net
-    gets the same type as ``net``, so a clock stays a clock.
+    placeBufferNear()). If the placement is not ``legalized`` yet, it is
+    put exactly at ``position`` (see createBufferAt()). The output net gets
+    the same type as ``net``, so a clock stays a clock.
 
     If ``net`` has already been flattened (it has RoutingPads), the
     RoutingPads of the moved sinks are moved to the output net, and new
@@ -147,7 +177,10 @@ def insertBuffer ( etesian, net, sinkPlugs, bufferCell, name, sliceHeight, maxRo
     with UpdateSession():
         if position is None:
             position = getSinksCenter( sinkPlugs )
-        instance = placeBufferNear( etesian, bufferCell, name, position, sliceHeight, maxRows )
+        if legalized:
+            instance = placeBufferNear( etesian, bufferCell, name, position, sliceHeight, maxRows )
+        else:
+            instance = createBufferAt( etesian, bufferCell, name, position )
         if instance is None:
             return None, None
 
@@ -373,7 +406,7 @@ class BufferSizer ( object ):
         return self.buffers[-1][0]
 
 
-def buildClockTree ( etesian, net, bufferCells, sliceHeight, maxSinks, maxRows=10 ):
+def buildClockTree ( etesian, net, bufferCells, sliceHeight, maxSinks, maxRows=10, legalized=True ):
     """
     Build, after placement, a buffer tree on ``net``. The tree is built
     bottom-up: the sinks of ``net`` are partitioned in groups (see
@@ -389,6 +422,11 @@ def buildClockTree ( etesian, net, bufferCells, sliceHeight, maxSinks, maxRows=1
     returning the buffer cell of a group of sinks.
 
     Buffers are named "cts_<net>_<level>_<index>".
+
+    If the placement is not ``legalized`` yet (between
+    EtesianEngine.placeGlobal() and EtesianEngine.placeLegalize()), the
+    buffers are put exactly at their wanted position and the nets they drive
+    are excluded from the placement, as ``net`` itself.
 
     Return the list of the levels, each level being the list of its
     buffer instances.
@@ -417,12 +455,14 @@ def buildClockTree ( etesian, net, bufferCells, sliceHeight, maxSinks, maxRows=1
             else:
                 bufferCell = atLevel( bufferCells, len(levels) )
             instance, outputNet = insertBuffer( etesian, net, group, bufferCell
-                                              , name, sliceHeight, maxRows, position )
+                                              , name, sliceHeight, maxRows, position, legalized )
             if instance is None:
                 raise ErrorMessage( 1, [ 'cts.buildClockTree(): No room left to place buffer "{}" of "{}".' \
                                          .format( name, net.getName() )
                                        , 'Searched {} rows around the sinks center, please increase free space.' \
                                          .format( maxRows ) ] )
+            if not legalized:
+                etesian.exclude( str(outputNet.getName()) )
             if isinstance(bufferCells, BufferSizer):
                 bufferCells.setLatency( instance, group )
             level.append( instance )

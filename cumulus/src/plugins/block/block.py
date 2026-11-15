@@ -596,15 +596,22 @@ class Block ( object ):
         for netName in self.conf.ctsNets:
             self.etesian.exclude( netName )
 
-    def addCtsTrees ( self ):
+    def addCtsTrees ( self, beforeLegalization=False ):
         """
         Build the post-placement clock trees (see cts.buildClockTree()). Must be
         called after EtesianEngine.toHurricane(), the buffers are inserted in
-        the feed cells.
+        the feed cells. With ``beforeLegalization``, build instead the trees
+        requested before the legalization, between EtesianEngine.placeGlobal()
+        and EtesianEngine.placeLegalize().
         """
-        if not self.conf.ctsNets: return
-        print( '  o  Building post-placement clock tree(s).' )
-        for netName in self.conf.ctsNets:
+        netNames = [ netName for netName in self.conf.ctsNets
+                     if self.conf.ctsOptions[netName]['beforeLegalization'] == beforeLegalization ]
+        if not netNames: return
+        if beforeLegalization:
+            print( '  o  Building clock tree(s) before legalization.' )
+        else:
+            print( '  o  Building post-placement clock tree(s).' )
+        for netName in netNames:
             net = self.conf.cell.getNet( netName )
             if net is None:
                 print( ErrorMessage( 3, 'Block.addCtsTrees(): Cell "{}" has no clock net "{}".' \
@@ -632,7 +639,8 @@ class Block ( object ):
                                            , net
                                            , buffers
                                            , self.conf.sliceHeight
-                                           , maxSinks )
+                                           , maxSinks
+                                           , legalized=not beforeLegalization )
             dots( 82
                 , '     - "{}", {} sinks'.format( netName, sinksCount )
                 , ' {} buffers, {} levels'.format( sum( len(level) for level in levels ), len(levels) ))
@@ -850,7 +858,12 @@ class Block ( object ):
         if self.conf.useHFNS:   
             self.etesian.doHFNS()
             Breakpoint.stop( 100, 'HFNS (Etesian) done.' )
-        self.etesian.place()
+        if any( options['beforeLegalization'] for options in self.conf.ctsOptions.values() ):
+            self.etesian.placeGlobal()
+            self.addCtsTrees( beforeLegalization=True )
+            self.etesian.placeLegalize()
+        else:
+            self.etesian.place()
         Breakpoint.stop( 100, 'Placement done.' )
         self.etesian.clearColoquinte()
 

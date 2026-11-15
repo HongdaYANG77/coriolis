@@ -1794,11 +1794,13 @@ class BlockConf ( GaugeConf ):
         if net and net.isClock():
             self.useClockTree = True
 
-    def usePostPlacementCts ( self, netName, buffers=None, maxSinks=None ):
+    def usePostPlacementCts ( self, netName, buffers=None, maxSinks=None, beforeLegalization=False ):
         """
         Request a clock tree on ``netName`` built *after* the placement (see
         plugins.block.cts.buildClockTree()), instead of an H-Tree built before
-        it.
+        it. With ``beforeLegalization``, the tree is built after the global
+        placement only, its buffers are put where they are wanted and the
+        legalization makes room for them.
 
         ``buffers`` is the name of the buffer cell, or a list of names, one per
         level starting from the sinks, the last one being used for the upper
@@ -1816,7 +1818,9 @@ class BlockConf ( GaugeConf ):
                                    .format(netName)) )
             return
         self.ctsNets.append( netName )
-        self.ctsOptions[ netName ] = { 'buffers': buffers, 'maxSinks': maxSinks }
+        self.ctsOptions[ netName ] = { 'buffers'           : buffers
+                                     , 'maxSinks'          : maxSinks
+                                     , 'beforeLegalization': beforeLegalization }
         trace( 550,'\tBlockConf.usePostPlacementCts() on "{}"\n'.format( netName ))
 
     def addTrackAvoid ( self, trackAvoid ):
